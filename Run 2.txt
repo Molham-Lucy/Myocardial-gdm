@@ -1,0 +1,21 @@
+Training completed, but synthesis did not work as intended. The notebook ran all 100 epochs, and validation Huber loss improved from 0.441 at the start to a best of 0.041 around epoch 91. However, validation loss then spiked to 63.6 at epoch 98; by epoch 100 it was 0.074, worse than its best. The recorded metrics and plots are in myocardial_training_history.csv and the notebook.
+
+The notebook’s displayed validation sample used the final in-memory model. I also loaded the saved best-validation checkpoint and generated the same validation T2 slice: it remained a blurry, mottled pattern that did not reproduce the reference image’s anatomy. So the poor result is not just a consequence of using the final, unstable epoch.
+
+In short: the run produced improving noise-prediction metrics for much of training, but those metrics did not translate into a credible T2 prediction. I would not use the current C0/bSSFP or T2 outputs as predictive images. The dataset is modest and may constrain quality, but these results alone do not show that data volume is the sole cause.
+
+I’d **fix and benchmark the paired-image pipeline before investing in a larger diffusion run**. The latest result shows that lower noise-prediction loss did not produce a convincing T2 image, and one validation epoch spiked sharply. I’d work through these steps:
+
+1. **Verify alignment and data quality case by case.** Confirm each LGE is paired with the correct T2 or C0/bSSFP from the same subject, and that the images are registered well enough for voxelwise learning. Review overlays across multiple cases and slices—not only one example. Resampling to a shared voxel grid does not itself guarantee anatomical registration.
+
+2. **Establish a simpler supervised baseline.** Train a paired U-Net to predict T2 from LGE directly, first at lower resolution. This tests whether the data contain a learnable LGE-to-T2 mapping without the extra difficulty of diffusion sampling. Compare it against a simple mean/identity baseline and report validation results by subject. If the U-Net also fails, focus on pairing, registration, and intensity handling before changing the generative model.
+
+3. **Make training more stable.** The validation loss jumping from about **0.043 at epoch 97 to 63.6 at epoch 98** is concerning. Lower the learning rate, add gradient clipping, and retain the best-validation checkpoint with early stopping. Track whether the spike recurs; don’t judge the model from the final epoch alone.
+
+4. **Revisit the diffusion objective and sampler.** The current sampler’s clipping limits extreme values but hasn’t made samples anatomically credible. Consider a more stable prediction parameterization such as **v-prediction**, and validate generation at every checkpoint. The reported loss measures predicted-noise error; it is not a direct measure of image fidelity.
+
+5. **Use validation measures that reflect the goal.** On held-out subjects, compare generated images with references using image metrics such as SSIM and MAE, alongside expert visual review. Inspect several slices and multiple random seeds. Keep patient-level separation between training and validation.
+
+6. **Address limited paired data if simpler experiments support it.** There are only **80 paired T2 cases** and **104 paired C0 cases**. More paired cases would help; paired geometric augmentation and transfer learning may also be worth testing. The number of slices does not replace the number of independent subjects.
+
+My suggested first experiment is the **lower-resolution paired U-Net baseline plus a multi-case alignment review**. It will help distinguish a data/pairing problem from a diffusion-specific training or sampling problem before spending time tuning diffusion.
