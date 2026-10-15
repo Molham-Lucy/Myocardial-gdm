@@ -393,6 +393,10 @@ def generate_conditioned(
         predicted_clean = (
             image - np.sqrt(1.0 - alpha_bar) * predicted_noise
         ) / np.sqrt(alpha_bar)
+        predicted_clean = tf.clip_by_value(predicted_clean, -1.0, 1.0)
+        predicted_noise = (
+            image - np.sqrt(alpha_bar) * predicted_clean
+        ) / np.sqrt(1.0 - alpha_bar)
         image = (
             np.sqrt(previous_alpha_bar) * predicted_clean
             + np.sqrt(1.0 - previous_alpha_bar) * predicted_noise

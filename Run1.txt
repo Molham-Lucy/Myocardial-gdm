@@ -1,0 +1,11 @@
+In Run 1, the 100-epoch training run completed, but generation did not succeed. The logged training loss fell from 0.5172 to 0.0348, and validation loss from 0.4382 to 0.0401. There was a TensorFlow layout-optimizer warning early in training, but the run continued through epoch 100.
+
+The generated image is not explained by sample count alone. I reproduced it with the saved checkpoint and found a sampling instability: at the final noise timestep, alpha_bar is about 2.43 × 10⁻⁹. A measured noise-prediction MAE of 0.0565 at that timestep becomes a clean-image estimate error over 1,100 when the sampler divides by sqrt(alpha_bar). Trying 1,000 instead of 100 sampling steps did not resolve the problem.
+
+I updated the sampler in myocardial_data.py to constrain each intermediate clean-image estimate to the data range and recompute noise consistently. This removes the extreme speckled output, but my check with the existing checkpoint still produced texture rather than a convincing T2 image. So the sampler issue is real, and the model still needs improvement; I would not treat this result as a usable prediction.
+
+The training set has 80 paired T2 cases and 104 paired C0/bSSFP cases; validation has 15 of each. That is modest data for diffusion training and may limit quality, but the poor sample also persists after stabilizing the sampler, so dataset size alone is not a confirmed explanation.
+
+I also updated the notebook training cell to record and plot training/validation loss and noise MAE—not classification accuracy, since this is a continuous noise-prediction task. Per-epoch metrics are saved to myocardial_training_history.csv. I cleared the stale training and sample plots; rerun the setup, training, results-plot, and generation cells to refresh them. The new MAE history requires another training run; the existing run’s saved output has loss values only.
+
+I verified the edited notebook code and plotted the two metric panels with a test history. A sample from the updated sampler is finite, but visual quality remains poor.
