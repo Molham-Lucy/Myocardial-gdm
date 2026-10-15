@@ -157,14 +157,17 @@ def make_paired_dataset(
     batch_size: int = 16,
     shuffle: bool = False,
     seed: int = 42,
+    prediction_type: str = "epsilon",
 ) -> tf.data.Dataset:
-    """Create a streamed 2D-slice dataset with LGE and target-modality conditioning."""
+    """Create a streamed paired-slice dataset for epsilon or velocity prediction."""
     if not records:
         raise ValueError("Cannot build a dataset from an empty paired-case list")
     if image_size <= 0 or batch_size <= 0:
         raise ValueError("image_size and batch_size must be positive")
     if len(alpha_cumprod) != timesteps + 1:
         raise ValueError("alpha_cumprod must contain entries for steps 0..timesteps")
+    if prediction_type not in ("epsilon", "v"):
+        raise ValueError("prediction_type must be 'epsilon' or 'v'")
 
     dataset = tf.data.Dataset.from_generator(
         lambda: _iter_paired_slices(records),
@@ -208,12 +211,18 @@ def make_paired_dataset(
         noisy_target = (
             tf.sqrt(alpha_bar) * target + tf.sqrt(1.0 - alpha_bar) * noise
         )
+        prediction_target = noise
+        if prediction_type == "v":
+            prediction_target = (
+                tf.sqrt(alpha_bar) * noise
+                - tf.sqrt(1.0 - alpha_bar) * target
+            )
         return {
             "X_noisy": noisy_target,
             "X_condition": lge,
             "time": time,
             "modality": modality,
-        }, noise
+        }, prediction_target
 
     return dataset.map(
         add_noise, num_parallel_calls=tf.data.AUTOTUNE
@@ -234,6 +243,15 @@ def paired_case_counts(records: Sequence[PairedCase]) -> Counter[str]:
             for modality in TARGET_MODALITIES
         }
     )
+
+
+def paired_slice_count(records: Sequence[PairedCase]) -> int:
+    """Count slices using the same canonical slice-axis rule as the loader."""
+    count = 0
+    for record in records:
+        image = nib.as_closest_canonical(nib.load(str(record.lge_path)))
+        count += image.shape[_slice_axis(image, image.shape)]
+    return count
 
 
 class _TimeEncoding(tf.keras.layers.Layer):
@@ -260,7 +278,7 @@ class _TimeEncoding(tf.keras.layers.Layer):
 def build_conditional_diffusion_model(
     timesteps: int, image_size: int = 128, embedding_size: int = 64
 ) -> tf.keras.Model:
-    """Build a 2D U-Net that predicts target noise from LGE and target modality."""
+    """Build a 2D U-Net that predicts a diffusion target from LGE and modality."""
     if image_size <= 0 or image_size % 8:
         raise ValueError("image_size must be a positive multiple of 8")
 
@@ -333,7 +351,7 @@ def build_conditional_diffusion_model(
         z = tf.keras.layers.Concatenate()([z, cross_skips.pop()])
         skip = z
 
-    noise_prediction = tf.keras.layers.Conv2D(1, 3, padding="same")(z)
+    prediction = tf.keras.layers.Conv2D(1, 3, padding="same")(z)
     return tf.keras.Model(
         inputs={
             "X_noisy": noisy_input,
@@ -341,7 +359,7 @@ def build_conditional_diffusion_model(
             "time": time_input,
             "modality": modality_input,
         },
-        outputs=noise_prediction,
+        outputs=prediction,
     )
 
 
@@ -352,6 +370,7 @@ def generate_conditioned(
     alpha_cumprod: np.ndarray,
     timesteps: int,
     sampling_steps: int = 100,
+    prediction_type: str = "epsilon",
 ) -> tf.Tensor:
     """Generate target slices with deterministic DDIM sampling."""
     if target_modality not in TARGET_MODALITIES:
@@ -362,6 +381,8 @@ def generate_conditioned(
         raise ValueError("sampling_steps must be in the range 1..timesteps")
     if len(alpha_cumprod) != timesteps + 1:
         raise ValueError("alpha_cumprod must contain entries for steps 0..timesteps")
+    if prediction_type not in ("epsilon", "v"):
+        raise ValueError("prediction_type must be 'epsilon' or 'v'")
 
     lge_batch = tf.convert_to_tensor(lge_batch, dtype=tf.float32)
     if lge_batch.shape.rank != 4:
@@ -377,7 +398,7 @@ def generate_conditioned(
     for index, time_step in enumerate(times):
         previous_step = int(times[index + 1]) if index + 1 < len(times) else 0
         time = tf.fill((batch_size,), int(time_step))
-        predicted_noise = model(
+        prediction = model(
             {
                 "X_noisy": image,
                 "X_condition": lge_batch,
@@ -387,16 +408,30 @@ def generate_conditioned(
             training=False,
         )
         alpha_bar = alpha_cumprod[time_step]
+        sqrt_alpha_bar = np.sqrt(alpha_bar)
+        sqrt_one_minus_alpha_bar = np.sqrt(1.0 - alpha_bar)
+        if prediction_type == "v":
+            predicted_clean = (
+                sqrt_alpha_bar * image
+                - sqrt_one_minus_alpha_bar * prediction
+            )
+            predicted_noise = (
+                sqrt_one_minus_alpha_bar * image
+                + sqrt_alpha_bar * prediction
+            )
+        else:
+            predicted_noise = prediction
+            predicted_clean = (
+                image - sqrt_one_minus_alpha_bar * predicted_noise
+            ) / sqrt_alpha_bar
         previous_alpha_bar = (
             alpha_cumprod[previous_step] if previous_step else 1.0
         )
-        predicted_clean = (
-            image - np.sqrt(1.0 - alpha_bar) * predicted_noise
-        ) / np.sqrt(alpha_bar)
         predicted_clean = tf.clip_by_value(predicted_clean, -1.0, 1.0)
-        predicted_noise = (
-            image - np.sqrt(alpha_bar) * predicted_clean
-        ) / np.sqrt(1.0 - alpha_bar)
+        if previous_step:
+            predicted_noise = (
+                image - sqrt_alpha_bar * predicted_clean
+            ) / sqrt_one_minus_alpha_bar
         image = (
             np.sqrt(previous_alpha_bar) * predicted_clean
             + np.sqrt(1.0 - previous_alpha_bar) * predicted_noise
@@ -413,6 +448,7 @@ def synthesize_volume(
     image_size: int = 128,
     sampling_steps: int = 100,
     output_path: str | Path | None = None,
+    prediction_type: str = "epsilon",
 ) -> np.ndarray:
     """Synthesize one 3D target volume on the canonical LGE voxel grid."""
     image, lge = load_lge_volume(lge_path)
@@ -429,6 +465,7 @@ def synthesize_volume(
             alpha_cumprod,
             timesteps,
             sampling_steps,
+            prediction_type,
         )
         generated = tf.image.resize(generated, (height, width))[0, ..., 0]
         generated_slices.append(generated.numpy())
