@@ -87,9 +87,17 @@ def normalize_volume(volume: np.ndarray, path: str | Path) -> np.ndarray:
     return (2.0 * (volume - low) / (high - low) - 1.0).astype(np.float32)
 
 
+def _slice_axis(image: nib.Nifti1Image, volume_shape: Sequence[int]) -> int:
+    singleton_axes = [
+        axis for axis, size in enumerate(volume_shape) if size == 1
+    ]
+    if len(singleton_axes) == 1:
+        return singleton_axes[0]
+    return int(np.argmax(nib.affines.voxel_sizes(image.affine)))
+
+
 def _move_slice_axis_last(image: nib.Nifti1Image, volume: np.ndarray) -> np.ndarray:
-    slice_axis = int(np.argmax(nib.affines.voxel_sizes(image.affine)))
-    return np.moveaxis(volume, slice_axis, 2)
+    return np.moveaxis(volume, _slice_axis(image, volume.shape), 2)
 
 
 def load_aligned_pair(record: PairedCase) -> tuple[nib.Nifti1Image, np.ndarray, np.ndarray]:
@@ -421,7 +429,7 @@ def synthesize_volume(
         generated = tf.image.resize(generated, (height, width))[0, ..., 0]
         generated_slices.append(generated.numpy())
     generated_volume = np.stack(generated_slices, axis=2).astype(np.float32)
-    slice_axis = int(np.argmax(nib.affines.voxel_sizes(image.affine)))
+    slice_axis = _slice_axis(image, image.shape)
     generated_volume = np.moveaxis(generated_volume, 2, slice_axis)
 
     if output_path is not None:
