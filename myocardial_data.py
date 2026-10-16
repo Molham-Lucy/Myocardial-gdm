@@ -136,6 +136,88 @@ def load_lge_volume(path: str | Path) -> tuple[nib.Nifti1Image, np.ndarray]:
     return image, _move_slice_axis_last(image, data)
 
 
+def resize_normalized_image(image: tf.Tensor, image_size: int) -> tf.Tensor:
+    """Resize an HWC image into a square without changing its aspect ratio."""
+    image = tf.convert_to_tensor(image, dtype=tf.float32)
+    if image.shape.rank != 3:
+        raise ValueError("image must have shape [height, width, channels]")
+    if image_size <= 0:
+        raise ValueError("image_size must be positive")
+
+    shape = tf.shape(image)
+    height, width = shape[0], shape[1]
+    scale = tf.cast(image_size, tf.float32) / tf.cast(
+        tf.maximum(height, width), tf.float32
+    )
+    resized_height = tf.maximum(
+        1, tf.cast(tf.round(tf.cast(height, tf.float32) * scale), tf.int32)
+    )
+    resized_width = tf.maximum(
+        1, tf.cast(tf.round(tf.cast(width, tf.float32) * scale), tf.int32)
+    )
+    resized = tf.image.resize(
+        image, (resized_height, resized_width), antialias=True
+    )
+
+    pad_height = image_size - resized_height
+    pad_width = image_size - resized_width
+    top = pad_height // 2
+    left = pad_width // 2
+    return tf.pad(
+        resized,
+        (
+            (top, pad_height - top),
+            (left, pad_width - left),
+            (0, 0),
+        ),
+        constant_values=-1.0,
+    )
+
+
+def restore_normalized_image(
+    image: tf.Tensor, output_shape: Sequence[int]
+) -> tf.Tensor:
+    """Remove centered square padding and resize an HWC image to its source grid."""
+    image = tf.convert_to_tensor(image, dtype=tf.float32)
+    if image.shape.rank != 3:
+        raise ValueError("image must have shape [height, width, channels]")
+    if len(output_shape) != 2:
+        raise ValueError("output_shape must contain height and width")
+
+    output_height, output_width = (
+        tf.convert_to_tensor(dimension, dtype=tf.int32)
+        for dimension in output_shape
+    )
+    image_size = tf.shape(image)[0]
+    tf.debugging.assert_equal(
+        tf.shape(image)[1], image_size,
+        message="image must be square before removing padding",
+    )
+    scale = tf.cast(image_size, tf.float32) / tf.cast(
+        tf.maximum(output_height, output_width), tf.float32
+    )
+    resized_height = tf.maximum(
+        1,
+        tf.cast(
+            tf.round(tf.cast(output_height, tf.float32) * scale), tf.int32
+        ),
+    )
+    resized_width = tf.maximum(
+        1,
+        tf.cast(
+            tf.round(tf.cast(output_width, tf.float32) * scale), tf.int32
+        ),
+    )
+    top = (image_size - resized_height) // 2
+    left = (image_size - resized_width) // 2
+    unpadded = tf.slice(
+        image, (top, left, 0), (resized_height, resized_width, -1)
+    )
+    return tf.image.resize(
+        unpadded, (output_height, output_width), antialias=True
+    )
+
+
 def _iter_paired_slices(
     records: Sequence[PairedCase],
 ) -> Iterator[tuple[np.ndarray, np.ndarray, np.int32]]:
@@ -158,6 +240,7 @@ def make_paired_dataset(
     shuffle: bool = False,
     seed: int = 42,
     prediction_type: str = "epsilon",
+    preserve_aspect: bool = False,
 ) -> tf.data.Dataset:
     """Create a streamed paired-slice dataset for epsilon or velocity prediction."""
     if not records:
@@ -181,10 +264,14 @@ def make_paired_dataset(
     def resize_pair(
         lge: tf.Tensor, target: tf.Tensor, modality: tf.Tensor
     ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        lge = tf.image.resize(lge[..., tf.newaxis], (image_size, image_size))
-        target = tf.image.resize(
-            target[..., tf.newaxis], (image_size, image_size)
-        )
+        lge = lge[..., tf.newaxis]
+        target = target[..., tf.newaxis]
+        if preserve_aspect:
+            lge = resize_normalized_image(lge, image_size)
+            target = resize_normalized_image(target, image_size)
+        else:
+            lge = tf.image.resize(lge, (image_size, image_size))
+            target = tf.image.resize(target, (image_size, image_size))
         return lge, target, modality
 
     dataset = dataset.map(
@@ -449,15 +536,20 @@ def synthesize_volume(
     sampling_steps: int = 100,
     output_path: str | Path | None = None,
     prediction_type: str = "epsilon",
+    preserve_aspect: bool = False,
 ) -> np.ndarray:
     """Synthesize one 3D target volume on the canonical LGE voxel grid."""
     image, lge = load_lge_volume(lge_path)
     height, width, depth = lge.shape
     generated_slices = []
     for slice_index in range(depth):
-        lge_slice = tf.image.resize(
-            lge[:, :, slice_index, np.newaxis], (image_size, image_size)
-        )
+        lge_slice = lge[:, :, slice_index, np.newaxis]
+        if preserve_aspect:
+            lge_slice = resize_normalized_image(lge_slice, image_size)
+        else:
+            lge_slice = tf.image.resize(
+                lge_slice, (image_size, image_size)
+            )
         generated = generate_conditioned(
             model,
             lge_slice[tf.newaxis, ...],
@@ -467,7 +559,16 @@ def synthesize_volume(
             sampling_steps,
             prediction_type,
         )
-        generated = tf.image.resize(generated, (height, width))[0, ..., 0]
+        generated = generated[0]
+        if preserve_aspect:
+            generated = restore_normalized_image(
+                generated, (height, width)
+            )
+        else:
+            generated = tf.image.resize(
+                generated, (height, width)
+            )
+        generated = generated[..., 0]
         generated_slices.append(generated.numpy())
     generated_volume = np.stack(generated_slices, axis=2).astype(np.float32)
     slice_axis = _slice_axis(image, image.shape)

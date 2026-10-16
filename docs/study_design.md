@@ -18,8 +18,14 @@ not quantitative T2 maps and are not substitutes for acquired images.
    credible T2/bSSFP outputs. A controlled velocity-prediction rerun reduced
    mean MAE versus the prior epsilon sampler on one central resized slice from
    0.861 to 0.292 for C0 and 0.948 to 0.258 for T2 (15 validation cases per
-   modality), but predictions remain blurry and SSIM remains low. The
-   notebooks, reports, prediction volumes, checkpoints, histories, and
+   modality), but predictions remain blurry and SSIM remains low. A subsequent
+   aspect-preserving preprocessing ablation made only small changes in a
+   same-noise comparison with Run 3: C0 MAE/SSIM/PSNR were 0.287/0.320/13.35
+   versus 0.289/0.302/13.18, and T2 values were 0.258/0.345/13.89 versus
+   0.257/0.336/13.88. Visual quality remains insufficient for clinical use.
+   The 214-pair geometry audit found no shape or affine mismatches, but matching
+   grids do not prove anatomical registration; expert review remains necessary.
+   The notebooks, reports, prediction volumes, checkpoints, histories, and
    comparison artifacts are retained as development evidence.
 2. **Direct supervised baseline** — [`experiments/02_supervised/`](../experiments/02_supervised/)
    trains independent LGE-to-T2 and LGE-to-C0 U-Nets and compares against
@@ -49,7 +55,8 @@ validation set and relabeling it as a test set.
 
 - Review pair identity, image quality, orientation, registration, and
   acquisition differences with cardiac MRI domain experts. Matching NIfTI
-  affines is not evidence of accurate anatomical registration.
+  shapes and affines—as found in the current 214-pair audit—is not evidence of
+  accurate anatomical registration or sequence-phase correspondence.
 - Report patient-level MAE, SSIM, and PSNR for weighted-image fidelity,
   alongside multi-case and multi-slice visual review. Use the same patients,
   preprocessing, and splits for every method. Do not compare diffusion
@@ -81,4 +88,6 @@ establish reliable modality prediction, preserved diagnostic findings,
 clinical utility, or state-of-the-art performance. Run 3's lower MAE than the
 previous epsilon sampler demonstrates improvement within this diffusion
 pipeline, but its low SSIM and visibly mottled predictions do not support a
-claim of credible synthesized anatomy.
+claim of credible synthesized anatomy. Run 4's aspect-preserving preprocessing
+had mixed, small image-metric effects and did not resolve the visual-quality
+problem.

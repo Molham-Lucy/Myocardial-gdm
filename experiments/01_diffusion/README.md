@@ -1,9 +1,9 @@
 # Experiment 01 — LGE-conditioned diffusion
 
 This is the original and first modeling experiment in the project. It remains
-available for reproducibility and comparison. The notebook now also provides
-an isolated Run 3 using velocity (`v`) prediction to address instability in
-the earlier epsilon-prediction sampler.
+available for reproducibility and comparison. The notebook also provides
+isolated Run 3 (velocity prediction) and Run 4 (aspect-preserving
+preprocessing) workflows, each with separate outputs.
 
 ## Run history
 
@@ -64,6 +64,51 @@ epsilon sampler; mean SSIM was 0.228 for C0 and 0.250 for T2. These numbers
 are specific to one central 128 × 128 resized slice per validation subject,
 and do not establish diagnostic fidelity.
 
+## Run 4 — aspect-preserving preprocessing
+
+The paired-geometry audit covered 184 training and 30 validation pairs. All
+LGE/target shapes and affines matched after canonicalization, but this does
+not establish anatomical registration or sequence-phase correspondence.
+Visual panels show broad anatomical correspondence alongside modality and
+appearance differences; expert review is still needed. No automatic
+deformable registration was applied.
+
+Run 4 keeps Run 3's v-prediction architecture, schedule, optimizer, training
+seed, and 100-epoch budget, changing only square-stretch resizing to
+aspect-preserving resize with centered padding. Predictions are unpadded to
+the original image grid before evaluation. The best checkpoint was from
+epoch 99 (validation Huber loss 0.04692); this diffusion-target loss is not an
+image-fidelity or clinical metric.
+
+The paired comparison uses one central slice from each of the 15 validation
+cases per modality, the same starting noise for both checkpoints, and 100
+DDIM steps. Metrics are calculated after restoring predictions to the
+original slice grid:
+
+| Modality | Preprocessing | MAE ↓ | SSIM ↑ | PSNR ↑ |
+|---|---|---:|---:|---:|
+| C0 | Square stretch (Run 3) | 0.2894 | 0.3017 | 13.18 |
+| C0 | Aspect preserving (Run 4) | 0.2871 | 0.3199 | 13.35 |
+| T2 | Square stretch (Run 3) | 0.2568 | 0.3362 | 13.88 |
+| T2 | Aspect preserving (Run 4) | 0.2579 | 0.3455 | 13.89 |
+
+The changes are small: C0 SSIM improved modestly, while T2 MAE was slightly
+worse and T2 SSIM improved modestly. Example predictions remain blurry and
+do not show clinically credible detail. The previous Run 3 summary used a
+different sampling-noise realization; its scores should not be compared
+directly with this same-noise ablation.
+
+Run 4 artifacts are kept separately:
+
+- `results/checkpoints/myocardial_conditional_diffusion_run04_aspect.keras`
+- `results/history/myocardial_training_history_run04_aspect.csv`
+- `results/figures/run_04_aspect_training_history.png`
+- `results/figures/run_04_aspect_comparison_C0.png` and
+  `run_04_aspect_comparison_T2.png`
+- `results/metrics/run_04_aspect_comparison_by_case.csv` and
+  `run_04_aspect_comparison_summary.csv`
+- `results/predictions/run_04_aspect_preserving/`
+
 ## Current artifacts
 
 - [`Myocardial Diffusion Model.ipynb`](Myocardial%20Diffusion%20Model.ipynb):
@@ -74,6 +119,8 @@ and do not establish diagnostic fidelity.
   metrics.
 - `results/figures/`: variance schedule and training history plots.
 - `results/predictions/Case1001/`: generated C0 and T2 NIfTI outputs.
+- `results/alignment_review/`: paired geometry audit and multi-case alignment
+  panels.
 
 The existing run results are development evidence, not evidence of clinical
 validity. In particular, low noise-prediction loss did not translate to

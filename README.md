@@ -9,7 +9,7 @@ validated and synthesized T2-weighted images are not quantitative T2 maps.
 
 | Order | Experiment | Purpose and current status |
 |---|---|---|
-| 01 | [LGE-conditioned diffusion](experiments/01_diffusion/Myocardial%20Diffusion%20Model.ipynb) | Retained as the first experiment. Run 3 velocity prediction improved held-out image metrics over the original epsilon sampler, but outputs remain blurry and are not clinically usable. Run 1/Run 2 artifacts and the separate Run 3 outputs are preserved under [01_diffusion](experiments/01_diffusion/). |
+| 01 | [LGE-conditioned diffusion](experiments/01_diffusion/Myocardial%20Diffusion%20Model.ipynb) | Retained as the first experiment. Run 3 velocity prediction improved over the original epsilon sampler; Run 4's aspect-preserving preprocessing made only small metric changes. Predictions remain blurry and are not clinically usable. Run 1/Run 2 records and separate Run 3/Run 4 artifacts are preserved under [01_diffusion](experiments/01_diffusion/). |
 | 02 | [Direct supervised U-Net](experiments/02_supervised/Myocardial%20Paired%20Supervised%20Baseline.ipynb) | Paired direct image-to-image baseline with alignment review, checkpointing, per-subject metrics, and prediction panels. Initial scores improve over simple baselines, but predictions remain blurred and validation is small. See [02_supervised](experiments/02_supervised/). |
 | 03 | [External/clinical-information evaluation](experiments/03_external_clinical_evaluation/README.md) | Planned, not implemented. Requires external-center data, expert review/labels, and a pre-specified clinical endpoint. |
 
